@@ -1,14 +1,14 @@
 // (C) 2015 Nandor Licker. All rights reserved.
 
-constant int WIDTH = 640;
-constant int HEIGHT = 480;
-constant size_t BOUNCES = 4;
+constant int WIDTH = 1280;
+constant int HEIGHT = 768;
+constant size_t BOUNCES = 8;
 
 
 constant float3 CAMERA_POS = (float3)(0.0f, 0.0f, -6.0f);
 constant float3 CAMERA_Z = (float3)(0.0f, 0.0f,  3.0f);
 constant float3 CAMERA_Y = (float3)(0.0f, 1.0f,  0.0f);
-constant float3 CAMERA_X = (float3)((float)(640.0f / 480.0f), 0.0f,  0.0f);
+constant float3 CAMERA_X = (float3)((float)(1280.0f / 768.0f), 0.0f,  0.0f);
 
 
 /**
@@ -16,12 +16,33 @@ constant float3 CAMERA_X = (float3)((float)(640.0f / 480.0f), 0.0f,  0.0f);
  */
 struct Sphere {
   float4 origin;
-  float4 colour;
+  float3 ambient;
+  float3 diffuse;
+  float3 specular;
+  float3 refl;
 };
 constant struct Sphere SPHERES[] = {
-  { (float4)( 0.0f, -0.2f,  0.0f, 0.5f), (float4)(1.0f, 0.2f, 0.2f, 1.0f) },
-  { (float4)( 0.4f,  0.5f, -0.2f, 0.4f), (float4)(0.2f, 1.0f, 0.2f, 1.0f) },
-  { (float4)(-0.4f,  0.3f,  0.0f, 0.3f), (float4)(0.2f, 0.2f, 1.0f, 1.0f) },
+  {
+      (float4)( 0.0f, -0.2f,  0.0f, 0.5f),
+      (float3)(1.0f, 0.2f, 0.2f),
+      (float3)(1.0f, 0.2f, 0.2f),
+      (float3)(1.0f, 0.2f, 0.2f),
+      1.0f
+  },
+  {
+      (float4)( 0.7f,  0.7f, -0.2f, 0.4f),
+      (float3)(1.0f, 0.2f, 0.2f),
+      (float3)(0.2f, 1.0f, 0.2f),
+      (float3)(0.2f, 1.0f, 0.2f),
+      1.0f
+  },
+  {
+      (float4)(-0.4f,  0.3f,  0.0f, 0.3f),
+      (float3)(1.0f, 0.2f, 0.2f),
+      (float3)(0.2f, 0.2f, 1.0f),
+      (float3)(0.2f, 0.2f, 1.0f),
+      1.0f
+  },
 };
 
 
@@ -29,12 +50,24 @@ constant struct Sphere SPHERES[] = {
  * List of light sources in the scene.
  */
 struct Light {
+  float3 ambient;
   float3 diffuse;
+  float3 specular;
   float3 direction;
 };
 constant struct Light LIGHTS[] = {
-  { (float3)(0.5f, 0.5f, 0.0f), (float3)(-1.0f, 1.0f, 1.0f) },
-  { (float3)(0.5f, 0.5f, 0.5f), (float3)( 1.0f, 1.0f, 1.0f) }
+  {
+    (float3)( 0.2f,  0.2f,  0.2f),
+    (float3)( 1.0f,  1.0f,  1.0f),
+    (float3)( 1.0f,  1.0f,  1.0f),
+    (float3)(-1.0f,  1.0f,  1.0f)
+  },
+  {
+    (float3)( 0.2f,  0.2f,  0.2f),
+    (float3)( 1.0f,  1.0f,  1.0f),
+    (float3)( 0.5f,  0.5f,  0.5f),
+    (float3)( 1.0f, -1.0f,  1.0f)
+  }
 };
 
 
@@ -45,9 +78,17 @@ struct Intersect {
   float3 point;
   float3 normal;
   float3 diffuse;
-  float refl;
+  float3 refl;
   bool found;
 };
+
+
+/**
+ * Computes the reflection of a ray relative to a surface normal.
+ */
+static float3 reflect(const float3 dir, const float3 normal) {
+  return dir - 2.0f * dot(dir, normal) * normal;
+}
 
 
 /**
@@ -55,8 +96,8 @@ struct Intersect {
  */
 static struct Intersect intersectSpheres(const float3 rayOrg, const float3 rayDir) {
   struct Intersect intersect = { (float3)0.0f, (float3)0.0f, (float3)0.0f, 0.0f, false };
+  float3 diffuse, specular, ambient;
   float minDist = FLT_MAX;
-  float3 diffuse;
 
   // Find the object intersected by the ray.
   for (size_t i = 0; i < sizeof(SPHERES) / sizeof(SPHERES[0]); ++i) {
@@ -96,9 +137,12 @@ static struct Intersect intersectSpheres(const float3 rayOrg, const float3 rayDi
     if (di < minDist) {
       intersect.point = rayOrg + rayDir * di;
       intersect.normal = normalize(intersect.point - sphere->origin.xyz);
+      intersect.refl = 1.0f;//sphere->refl;
       intersect.found = true;
-      intersect.refl = sphere->colour.w;
-      diffuse = sphere->colour.rgb;
+
+      ambient = sphere->ambient;
+      diffuse = sphere->diffuse;
+      specular = sphere->specular;
 
       minDist = di;
     }
@@ -107,7 +151,16 @@ static struct Intersect intersectSpheres(const float3 rayOrg, const float3 rayDi
   for (size_t i = 0; i < sizeof(LIGHTS) / sizeof(LIGHTS[0]); ++i) {
     constant struct Light *light = &LIGHTS[i];
     const float angle = max(0.0f, dot(intersect.normal, -light->direction));
-    intersect.diffuse.xyz += diffuse * angle * light->diffuse;
+    const float3 r = reflect(light->direction, intersect.normal);
+    const float3 v = normalize(CAMERA_POS - intersect.point);
+
+    // TODO(nandor): find out what's wrong with pow.
+    float spec = max(0.0f, dot(r, v));
+    spec = spec * spec * spec;
+
+    intersect.diffuse += ambient * light->ambient;
+    intersect.diffuse += diffuse * light->diffuse * angle;
+    intersect.diffuse += specular * light->specular * spec;
   }
 
   return intersect;
@@ -121,20 +174,23 @@ static struct Intersect intersectSpheres(const float3 rayOrg, const float3 rayDi
  */
 static float3 raytrace(float3 rayOrg, float3 rayDir) {
   float3 diffuse = 0.0f;
-  float refl = 1.0f;
+
+  float3 diffuseAcc = 1.0f;
+  float3 refl = 1.0f;
   for (size_t i = 0; i < BOUNCES; ++i) {
     struct Intersect intersect = intersectSpheres(rayOrg, rayDir);
     if (!intersect.found) {
       break;
     }
 
-    diffuse += refl * intersect.diffuse;
+    diffuse += refl * intersect.diffuse * diffuseAcc;
+    diffuseAcc *= intersect.diffuse;
     refl *= intersect.refl;
-    if (refl <= 0.0f) {
+    if (any(refl <= 0.0f)) {
       break;
     }
 
-    rayDir = rayDir - 2.0f * dot(rayDir, intersect.normal) * intersect.normal;
+    rayDir = reflect(rayDir, intersect.normal);
     rayOrg = intersect.point + rayDir * 0.0001f;
   }
 

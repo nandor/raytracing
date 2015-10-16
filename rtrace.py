@@ -6,8 +6,8 @@ import pyopencl as cl
 from PIL import Image
 
 
-WIDTH = 640
-HEIGHT = 480
+WIDTH = 1280
+HEIGHT = 768
 
 
 def main():
